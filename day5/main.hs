@@ -1,9 +1,6 @@
 {-#  LANGUAGE OverloadedStrings #-}
 {-#  LANGUAGE TypeApplications #-}
-import           System.IO
 import qualified Data.ByteString.Lazy.Char8    as BS
-import           Control.Applicative
-import           Data.Maybe
 
 data Parameter
     = Immediate Int
@@ -61,43 +58,49 @@ get (Pointer   p) program = program !! p
 getI :: Parameter -> [String] -> Int
 getI p = read . get p
 
+binOp
+  :: (Int -> Int -> Int)
+  -> Parameter
+  -> Parameter
+  -> Int
+  -> ([String], Int)
+  -> IO ([String], Int)
+binOp f in1 in2 out (program, pointer) = pure
+  (replaceAt (show $ f a b) out program, pointer + 4)
+ where
+  a = getI in1 program
+  b = getI in2 program
+
+jmpOp
+  :: (Int -> Bool)
+  -> Parameter
+  -> Parameter
+  -> ([String], Int)
+  -> IO ([String], Int)
+jmpOp f cond pos (program, pointer)
+  | f (getI cond program) = pure (program, pointer + 3)
+  | otherwise             = pure (program, getI pos program)
+
 exec :: Instruction -> ([String], Int) -> IO ([String], Int)
-exec (Instruction Add [in1, in2, Pointer out]) (program, pointer) = pure
-  (replaceAt (show $ a + b) out program, pointer + 4)
- where
-  a = getI in1 program
-  b = getI in2 program
-exec (Instruction Mul [in1, in2, Pointer out]) (program, pointer) = pure
-  (replaceAt (show $ a * b) out program, pointer + 4)
- where
-  a = getI in1 program
-  b = getI in2 program
+exec (Instruction Add [in1, in2, Pointer out]) (program, pointer) =
+  binOp (+) in1 in2 out (program, pointer)
+exec (Instruction Mul [in1, in2, Pointer out]) (program, pointer) =
+  binOp (*) in1 in2 out (program, pointer)
 exec (Instruction Input [Pointer out]) (program, pointer) = do
   input <- getLine
   pure (replaceAt input out program, pointer + 2)
 exec (Instruction Output [input]) (program, pointer) = do
   putStrLn $ get input program
   pure (program, pointer + 2)
-exec (Instruction JumpT [cond, pos]) (program, pointer)
-  | getI cond program == 0 = pure (program, pointer + 3)
-  | otherwise              = pure (program, getI pos program)
-exec (Instruction JumpF [cond, pos]) (program, pointer)
-  | getI cond program /= 0 = pure (program, pointer + 3)
-  | otherwise              = pure (program, getI pos program)
-exec (Instruction Lt [in1, in2, Pointer out]) (program, pointer) = pure
-  (replaceAt (if a < b then "1" else "0") out program, pointer + 4)
- where
-  a = getI in1 program
-  b = getI in2 program
-exec (Instruction Eq [in1, in2, Pointer out]) (program, pointer) = pure
-  (replaceAt (if a == b then "1" else "0") out program, pointer + 4)
- where
-  a = getI in1 program
-  b = getI in2 program
+exec (Instruction JumpT [cond, pos]) (program, pointer) =
+  jmpOp (== 0) cond pos (program, pointer)
+exec (Instruction JumpF [cond, pos]) (program, pointer) =
+  jmpOp (/= 0) cond pos (program, pointer)
+exec (Instruction Lt [in1, in2, Pointer out]) (program, pointer) =
+  binOp (\a b -> if a < b then 1 else 0) in1 in2 out (program, pointer)
+exec (Instruction Eq [in1, in2, Pointer out]) (program, pointer) =
+  binOp (\a b -> if a == b then 1 else 0) in1 in2 out (program, pointer)
 exec inst _ = error $ "invalid instruction: " ++ show inst
-
-getOp :: Instruction -> Op
-getOp (Instruction op _) = op
 
 execAll :: [String] -> Int -> IO [String]
 execAll program pointer
@@ -111,6 +114,7 @@ execAll program pointer
     (program', pointer') <- exec inst (program, pointer)
     execAll program' pointer'
 
+main :: IO [String]
 main = do
   program <- map BS.unpack . BS.split ',' <$> BS.readFile "input"
   execAll program 0
